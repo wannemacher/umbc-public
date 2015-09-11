@@ -1,18 +1,17 @@
 CC=gcc
 CFLAGS=-c -Wall
 
-all: mmap-sum
+all: ica20150909
 
-mmap-sum: mmap-sum.o
-	$(CC) -pthread mmap-sum.o -o mmap-sum
+ica20150909: ica20150909.o
+	$(CC) -pthread ica20150909.o -o ica20150909
 
-	@rm mmap-sum.o
+	@rm ica20150909.o
 
-mmap-sum.o: mmap-sum.c
-	$(CC) $(CFLAGS) mmap-sum.c
+ica20150909.o: ica20150909.c
+	$(CC) $(CFLAGS) ica20150909.c
 
 clean:
 	@rm -rf *.o 2> /dev/null || true
-	@rm -rf mmap-sum 2> /dev/null || true
-	@rm -rf sum 2> /dev/null || true
+	@rm -rf ica20150909 2> /dev/null || true
 	@rm -rf *~ 2> /dev/null || true
