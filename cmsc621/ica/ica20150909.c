@@ -24,30 +24,44 @@ struct queue
 
 struct queue * integers;
 
+/**
+ * Pushes the integer onto the end of the queue.
+ *
+ * @param q the queue onto which to push the integer
+ * @param x the integer
+ */
 void enqueue(struct queue * q, int x)
 {
-    struct node * temp = (struct node *) malloc(sizeof(struct node));
-    temp->data = x;
-    temp->next = NULL;
+    struct node * n = (struct node *) malloc(sizeof(struct node));
+    n->data = x;
+    n->next = NULL;
 
+    // Special case if the queue is empty
     if(q->head == NULL && q->tail == NULL)
     {
-        q->head = temp;
-        q->tail = temp;
+        q->head = n;
+        q->tail = n;
     }
     else
     {
-        q->tail->next = temp;
-        q->tail = temp;
+        q->tail->next = n;
+        q->tail = n;
     }
 
     q->size++;
 }
 
-void dequeue(struct queue * q)
+/**
+ * Pops the integer off the front of the queue.
+ *
+ * @param q the queue
+ * @return the integer at the front of the queue
+ */
+struct node * dequeue(struct queue * q)
 {
-    struct node * temp = q->head;
+    struct node * n = q->head;
 
+    // Special case if the queue has one item
     if(q->head == q->tail)
     {
         q->head = NULL;
@@ -59,19 +73,31 @@ void dequeue(struct queue * q)
     }
 
     q->size--;
-    free(temp);
+
+    return n;
 }
 
+/**
+ * Dequeues all the integers in the queue and frees the queue memory.
+ *
+ * @param q the queue to destroy
+ */
 void destroy_queue(struct queue * q)
 {
     while (q->size > 0)
     {
-        dequeue(q);
+        struct node * n = dequeue(q);
+        free(n);
     }
 
     free(q);
 }
 
+/**
+ * Prints the queue.
+ *
+ * @param q the queue
+ */
 void print_queue(struct queue * q)
 {
     printf("(%02d) [ ", q->size);
@@ -86,6 +112,12 @@ void print_queue(struct queue * q)
     printf("]");
 }
 
+/**
+ * The main function of the producer thread. Generates a random integer and
+ * enqueues it onto a shared queue as long as the queue isn't full.
+ *
+ * @return NULL
+ */
 void  * produce()
 {
     srand(time(NULL));
@@ -95,6 +127,7 @@ void  * produce()
     {
         x = rand() % 100;
 
+        // Wait for the queue to not be full then grab the lock
         pthread_mutex_lock(&mutex);
         while (integers->size >= MAX_QUEUE_SIZE)
         {
@@ -107,6 +140,7 @@ void  * produce()
         print_queue(integers);
         printf("\n");
 
+        // Signal that the queue isn't empty and release the lock
         pthread_cond_signal(&cv_queue_not_empty);
         pthread_mutex_unlock(&mutex);
     }
@@ -114,25 +148,32 @@ void  * produce()
     return NULL;
 }
 
+/**
+ * The main function of the consumer thread. Dequeues an integer from a shared
+ * queue as long as the queue isn't empty.
+ *
+ * @return NULL
+ */
 void * consume()
 {
-    srand(time(NULL));
-
     int i;
     for (i = 0; i < MAX_ITERATIONS; i++)
     {
+        // Wait for the queue to not be empty then grab the lock
         pthread_mutex_lock(&mutex);
         while (integers->size <= 0)
         {
             pthread_cond_wait(&cv_queue_not_empty, &mutex);
         }
 
-        dequeue(integers);
+        struct node * n = dequeue(integers);
+        free(n);
 
         printf("CONSUME: ");
         print_queue(integers);
         printf("\n");
 
+        // Signal that the queue isn't full and release the lock
         pthread_cond_signal(&cv_queue_not_full);
         pthread_mutex_unlock(&mutex);
     }
@@ -140,24 +181,51 @@ void * consume()
     return NULL;
 }
 
+/**
+ * The main function. Initializes a shared queue and creates a producer thread
+ * and a consumer thread.
+ *
+ * @return 0 on success
+ */
 int main(int argc, char ** argv)
 {
+    int status = 0;
     pthread_t producer, consumer;
 
     pthread_mutex_init(&mutex, NULL);
 
     integers = (struct queue *) malloc(sizeof(struct queue));
+    if (integers == NULL)
+    {
+        perror("Error : Unable to allocate memory for the integer queue ");
+        status++;
+        goto ret;
+    }
+
     integers->size = 0;
     integers->head = NULL;
     integers->tail = NULL;
 
-    pthread_create(&producer, NULL, produce, NULL);
-    pthread_create(&consumer, NULL, consume, NULL);
-	
-    pthread_join(producer, NULL);
-    pthread_join(consumer, NULL);
+    // Create the producer and consumer threads
+    status += pthread_create(&producer, NULL, produce, NULL);
+    status += pthread_create(&consumer, NULL, consume, NULL);
+    if (status != 0)
+    {
+        perror("Error : Unable to create producer/consumer threads ");
+        goto ret;
+    }
+
+    // Wait for the producer and consumer threads to terminate
+    status += pthread_join(producer, NULL);
+    status += pthread_join(consumer, NULL);
+    if (status != 0)
+    {
+        perror("Error : Unable to join producer/consumer threads ");
+        goto ret;
+    }
 
     destroy_queue(integers);
 
-    return 0;
+ret:
+    return status;
 }
