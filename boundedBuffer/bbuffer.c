@@ -13,7 +13,7 @@
 
 typedef struct queue NumQueue;
 
-//queue for storing bounded bufffer
+//queue for storing bounded buffer
 struct queue
 {
     int size;
