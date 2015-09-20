@@ -1,6 +1,7 @@
 /*
  * Code for the sensor
  */
+//#define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -25,16 +26,17 @@ pthread_mutex_t mutex;
 pthread_cond_t notfull, notempty;
 int value;
 int maxIntervals = 10;
+int updateInterval = 5;
+char state[4] = "ON";
 
 void *updateValue(void *numIntervals)
 {
+    int test = 0;
     int loop = 0;
     int numInts = *(int*)numIntervals;
     int currentInterval = 0;
     int modulus = intArray[numInts-1].endTime;
-    
-    //set the value for the first time here
-    value = intArray[currentInterval].value;
+    printf("Starting to update values...\n");
     
     //printf("Num intervals is %d\n",numInts);
     //printf("Modulus is %d\n",modulus);
@@ -45,8 +47,6 @@ void *updateValue(void *numIntervals)
     while(1)
     {
         long int curTime = clock()/CLOCKS_PER_SEC;
-        printf("time is %ld\n",curTime);
-        printf("value is %d\n",value);
         
         if ((curTime - (loop * modulus)) >= intArray[currentInterval].endTime)
         {
@@ -65,6 +65,121 @@ void *updateValue(void *numIntervals)
     }
 }
 
+//send the gateay currValue updates based on the specified interval
+void *notifyGateway(void *openSocket)
+{
+    int socketDesc = *(int*)openSocket;
+    char updateMessage[1000];
+    long int sentTime = clock()/CLOCKS_PER_SEC;
+    long int curTime;
+    
+    //printf("Starting to notify gateway...\n");
+    
+    //send initial value
+    sprintf(updateMessage,"Type:currValue;Action:%d",value);
+    //printf("My socket is %d\n",socketDesc);
+    if( send(socketDesc, updateMessage, sizeof(updateMessage), 0) < 0)
+    {
+        perror("Initial notification send failed. Error.\n");
+    }
+    
+    //continually send messages based upon the specified interval
+    while(1)
+    {
+        curTime = clock()/CLOCKS_PER_SEC;
+        if(curTime - sentTime >= updateInterval)
+        {
+            if(strcmp(state,"ON") == 0)
+            {
+                sprintf(updateMessage,"Type:currValue;Action:%d",value);
+                if( send(socketDesc, updateMessage, sizeof(updateMessage), 0) < 0)
+                {
+                    perror("Routine notification send failed. Error.\n");
+                }
+                sentTime = curTime;
+            }
+        }
+    }
+}
+
+void *receiveGatewayMessages(void *openSocket)
+{
+    int socketDesc = *(int*)openSocket;
+    char receivedMessage[2000];
+    const char delimeters[] = ":;";
+    char* nextState;
+    //printf("Starting receiving thread\n");
+    
+    //fancy select stuff we don't need
+    //fd_set mySocks;
+    //struct timeval myTimeVal;
+    //myTimeVal.tv_sec = 0;
+    //myTimeVal.tv_usec = 0;
+    
+    while(1)
+    {
+        if( recv(socketDesc, receivedMessage, 2000, 0) < 0)
+        {
+            printf("No data from server :(\n");
+        }
+        else
+        {
+            if(strncasecmp(receivedMessage,"Type:Switch;Action:",19) == 0)
+            {
+                printf("Got message to switch state of sensor...\n");
+                strtok(receivedMessage,delimeters);
+                strtok(NULL,delimeters);
+                strtok(NULL,delimeters);
+                nextState = strtok(NULL,delimeters);
+                if(strncasecmp(nextState,"ON",2) == 0)
+                {
+                    printf("Sensor is now ON\n");
+                    strcpy(state,"ON");
+                }
+                else if(strncasecmp(nextState,"OFF",3) == 0)
+                {
+                    printf("Sensor is now OFF\n");
+                    strcpy(state,"OFF");
+                }
+                else
+                {
+                    printf("Received invalid state request from server...\n");
+                }
+                
+                //TO-DO: send a currState message to server (potentially need to be careful here)?
+                //print-out doesn't say that we need to?
+            }
+            else if(strncasecmp(receivedMessage,"Type:setInterval;Action:",24) == 0)
+            {
+            }
+            else
+            {
+                printf("Got unknown message type from server...\n");
+            }
+        }
+        //fanciness with select() that might not be worthwhile
+        /*FD_ZERO(&mySocks);
+        FD_SET(socketDesc, &mySocks);
+        
+        if( select(1, &mySocks, NULL, NULL, &myTimeVal) == 0)
+        {
+            printf("Timed out waiting for server message...\n");
+        }
+        else
+        {
+            if(FD_ISSET(socketDesc, &mySocks))
+            {
+            
+            }
+            else
+            {
+                printf("Got a message from an invalid socket?...\n");
+            }
+        }*/
+    }    
+}
+
+//reads sensor config files, sets up socket, spawns threads for communication
 int main(int argc, char *argv[])
 {
     printf("Current time is: %ld\n",clock()/CLOCKS_PER_SEC);
@@ -80,7 +195,7 @@ int main(int argc, char *argv[])
     config = fopen(argv[1],"r");
     input = fopen(argv[2],"r");
     
-    printf("Reading input files...");
+    //printf("Reading input files...");
     
     if (config == NULL)
     {
@@ -125,7 +240,6 @@ int main(int argc, char *argv[])
     //pos2 = snprintf(gatewayIp+pos,sizeof(gatewayIp)-pos,"%d.",octet2);
     //pos3 = snprintf(gatewayIp+pos+pos2,sizeof(gatewayIp)-pos-pos2,"%d.",octet3);
     //pos4 = snprintf(gatewayIp+pos+pos2+pos3,sizeof(gatewayIp)-pos-pos2-pos3,"%d",octet4);
-
     
     //printf("IP: %s\n",gatewayIp);
     
@@ -134,8 +248,8 @@ int main(int argc, char *argv[])
     gateIp = strtok(gatewayLine,delimeters);
     gatePort = strtok(NULL,delimeters);
     
-    printf("ip is %s\n",gateIp);
-    printf("port is %s\n",gatePort);
+    //printf("ip is %s\n",gateIp);
+    //printf("port is %s\n",gatePort);
     
     char *copy, *type, *ip, *port, *areaId;
     //copy = strdupa(itemLine);
@@ -144,10 +258,10 @@ int main(int argc, char *argv[])
     port = strtok(NULL,delimeters);
     areaId = strtok(NULL,delimeters); 
     
-    printf("type is %s\n",type);
-    printf("ip is %s\n",ip);
-    printf("port is %s\n",port);
-    printf("areaId is %s\n",areaId);
+    //printf("type is %s\n",type);
+    //printf("ip is %s\n",ip);
+    //printf("port is %s\n",port);
+    //printf("areaId is %s\n",areaId);
     
     intArray = malloc(maxIntervals*sizeof(Interval));
     
@@ -161,7 +275,7 @@ int main(int argc, char *argv[])
         newInterval.endTime = stop;
         newInterval.value = value;
         intArray[count] = newInterval;
-        printf("Have this interval: %d, %d, %d\n",intArray[count].startTime,intArray[count].endTime,intArray[count].value);
+        //printf("Have this interval: %d, %d, %d\n",intArray[count].startTime,intArray[count].endTime,intArray[count].value);
         count+=1;        
         if(count >= maxIntervals)
         {         
@@ -179,16 +293,59 @@ int main(int argc, char *argv[])
             maxIntervals = maxIntervals*2;
         }
     }
+    fclose(input);
     
-    //need to create a socket
+    //set initial value for sensor here before threads start!
+    value = intArray[0].value;
     
-    pthread_t valueUpdater, notifier;
+    pthread_t valueUpdater, notifier, receiver;
     pthread_create(&valueUpdater, NULL, updateValue, (void *)&count);
+
+    int sock;
+    struct sockaddr_in server;
+    char message[1000], server_reply[2000];
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if(sock == -1)
+    {
+        printf("Could not create socket\n");
+    }
+    //printf("Socket created!\n");
+    
+    server.sin_addr.s_addr = inet_addr(gateIp);
+    server.sin_family = AF_INET;
+    server.sin_port = htons(atoi(gatePort));
+    
+    //TO-DO - Client side binding!
+    
+    if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0)
+    {
+        perror("Connection failed. Error.\n");
+        return 1;
+    }
+    //printf("Socket connected!\n");
+    
+    //compose initial registration message
+    char registerMessage[1000];
+    int len = sprintf(registerMessage,"Type:register;Action:%s-%s-%s-%s",type,ip,port,areaId);
+    
+    //send sensor registration message
+    if( send(sock, registerMessage, sizeof(registerMessage), 0) < 0)
+    {
+        printf("Sending registration failed. Error.\n");
+    }
+    
+    //printf("My initial socket is %d\n",sock);
+    
+    //TO-DO - send currState message?
+    //Talk to Randy to see if gateway should just assume that the state is true at first
+    
+    //start threads for sending/receiving from gateway
+    pthread_create(&notifier, NULL, notifyGateway, (void *)&sock);
+    //pthread_create(&receiver, NULL, receiveGatewayMessages, NULL);        
     
     pthread_join(valueUpdater, NULL);
+    pthread_join(notifier, NULL);
+    //pthread_join(receiver, NULL);
     
-    //pthread_create(&notifier, NULL, notifyGateway, NULL);
-    
-    //need to create a thread that updates the values
-    //need to create a thread that sends message to the gateway   
+    close(sock);
 }
